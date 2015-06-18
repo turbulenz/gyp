@@ -1502,6 +1502,60 @@ def _AdjustSourcesAndConvertToFilterHierarchy(
         and len(set([s.name for s in sources])) == 1:
       assert all([len(s.contents) == 1 for s in sources])
       sources = [s.contents[0] for s in sources]
+
+    def _print_hierarchy(n, indent=0):
+      def _log(msg):
+        print "%s%s" % (" " * indent, msg)
+      if isinstance(n, MSVSProject.Filter):
+        _log("F: %s" % n.name)
+        for _n in n.contents:
+          _print_hierarchy(_n, indent + 1)
+      else:
+        _log("N: %s" % n)
+
+    # The above doesn't seem to do anything.  We need to first combine
+    # all filters of the same name, and then remove those with a
+    # single child that is a filter.
+
+    def _process_layer(nodes, indent):
+      # def _log(msg):
+      #   print "%s%s" % (" " * indent, msg)
+      num_nodes = len(nodes)
+      # _log("%s: %d nodes:" % (nodes, num_nodes))
+
+      new_nodes = []
+      combined_nodes = {}
+
+      # Combine filters of the same name
+
+      def _add_filter(n):
+        """Combine contents into any existing filter of the same name"""
+        existing_node = combined_nodes.get(n.name, None)
+        if not existing_node:
+          combined_nodes[n.name] = n
+        else:
+          existing_node.contents.extend(n.contents)
+
+      for n in nodes:
+        if isinstance(n, MSVSProject.Filter) and (0 != len(n.name)):
+          _add_filter(n)
+        else:
+          new_nodes.append(n)
+
+      # Go through the combined nodes and remove any with only a single child
+
+      for k,v in combined_nodes.iteritems():
+        v.contents =_process_layer(v.contents, indent+1)
+        while isinstance(v, MSVSProject.Filter) and 1 == len(v.contents):
+          v = v.contents[0]
+          if isinstance(v, MSVSProject.Filter):
+            v.contents =_process_layer(v.contents, indent+1)
+        new_nodes.append(v)
+
+      return new_nodes
+
+    sources = _process_layer(sources, 0)
+
   else:
     while len(sources) == 1 and isinstance(sources[0], MSVSProject.Filter):
       sources = sources[0].contents
