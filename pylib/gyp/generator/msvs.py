@@ -1545,8 +1545,8 @@ def _AdjustSourcesAndConvertToFilterHierarchy(
         else:
           new_nodes.append(n)
 
-      # Go through the combined nodes and remove any with only a
-      # single.
+      # For all filters at this level, perform the same action on
+      # their children.
 
       for k,v in combined_nodes.iteritems():
         v.contents =_combine_tree(v.contents, indent+1)
