@@ -1517,7 +1517,10 @@ def _AdjustSourcesAndConvertToFilterHierarchy(
     # all filters of the same name, and then remove those with a
     # single child that is a filter.
 
-    def _process_layer(nodes, indent):
+    def _combine_tree(nodes, indent):
+      """
+      Recursively merge any child nodes with the same name.
+      """
       # def _log(msg):
       #   print "%s%s" % (" " * indent, msg)
       num_nodes = len(nodes)
@@ -1542,19 +1545,35 @@ def _AdjustSourcesAndConvertToFilterHierarchy(
         else:
           new_nodes.append(n)
 
-      # Go through the combined nodes and remove any with only a single child
+      # Go through the combined nodes and remove any with only a
+      # single.
 
       for k,v in combined_nodes.iteritems():
-        v.contents =_process_layer(v.contents, indent+1)
-        while isinstance(v, MSVSProject.Filter) and 1 == len(v.contents):
-          v = v.contents[0]
-          if isinstance(v, MSVSProject.Filter):
-            v.contents =_process_layer(v.contents, indent+1)
+        v.contents =_combine_tree(v.contents, indent+1)
         new_nodes.append(v)
 
       return new_nodes
 
-    sources = _process_layer(sources, 0)
+    def _collapse_tree(nodes, indent):
+      """For each child in the list recursively, if it is a filter called
+      '..' then bring it's children up into this layer.  If it is a
+      filter with a single child, bring that child up one level.
+
+      """
+      new_nodes = []
+      for v in nodes:
+        if isinstance(v, MSVSProject.Filter):
+          v.contents = _collapse_tree(v.contents, indent+1)
+          if ".." == v.name:
+            new_nodes.extend(v.contents)
+            continue
+          if 1 == len(v.contents):
+            v = v.contents[0]
+        new_nodes.append(v)
+      return new_nodes
+
+    sources = _combine_tree(sources, 0)
+    sources = _collapse_tree(sources, 0)
 
   else:
     while len(sources) == 1 and isinstance(sources[0], MSVSProject.Filter):
