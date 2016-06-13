@@ -770,7 +770,7 @@ def _EscapeCommandLineArgumentForMSBuild(s):
 def _EscapeMSBuildSpecialCharacters(s):
   escape_dictionary = {
       '%': '%25',
-      '$': '%24',
+      # '$': '%24', # used to refer to MSBuild variables in macros
       '@': '%40',
       "'": '%27',
       ';': '%3B',
