@@ -5,9 +5,10 @@
 """
 TestGyp.py:  a testing framework for GYP integration tests.
 """
+from __future__ import print_function
 
 import collections
-from contextlib import contextmanager
+import errno
 import itertools
 import os
 import re
@@ -15,6 +16,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+
+from contextlib import contextmanager
 
 import TestCmd
 import TestCommon
@@ -89,6 +92,8 @@ class TestGypBase(TestCommon.TestCommon):
   _lib = TestCommon.lib_suffix
   dll_ = TestCommon.dll_prefix
   _dll = TestCommon.dll_suffix
+  module_ = TestCommon.module_prefix
+  _module = TestCommon.module_suffix
 
   # Constants to represent different targets.
   ALL = '__all__'
@@ -98,6 +103,7 @@ class TestGypBase(TestCommon.TestCommon):
   EXECUTABLE = '__executable__'
   STATIC_LIB = '__static_lib__'
   SHARED_LIB = '__shared_lib__'
+  LOADABLE_MODULE = '__loadable_module__'
 
   def __init__(self, gyp=None, *args, **kw):
     self.origin_cwd = os.path.abspath(os.path.dirname(sys.argv[0]))
@@ -212,6 +218,27 @@ class TestGypBase(TestCommon.TestCommon):
         destination = source.replace(source_dir, dest_dir)
         shutil.copy2(source, destination)
 
+    # The gyp tests are run with HOME pointing to |dest_dir| to provide an
+    # hermetic environment. Symlink login.keychain and the 'Provisioning
+    # Profiles' folder to allow codesign to access to the data required for
+    # signing binaries.
+    if sys.platform == 'darwin':
+      old_keychain = GetDefaultKeychainPath()
+      old_provisioning_profiles = os.path.join(
+          os.environ['HOME'], 'Library', 'MobileDevice',
+          'Provisioning Profiles')
+
+      new_keychain = os.path.join(dest_dir, 'Library', 'Keychains')
+      MakeDirs(new_keychain)
+      os.symlink(old_keychain, os.path.join(new_keychain, 'login.keychain'))
+
+      if os.path.exists(old_provisioning_profiles):
+        new_provisioning_profiles = os.path.join(
+            dest_dir, 'Library', 'MobileDevice')
+        MakeDirs(new_provisioning_profiles)
+        os.symlink(old_provisioning_profiles,
+            os.path.join(new_provisioning_profiles, 'Provisioning Profiles'))
+
   def initialize_build_tool(self):
     """
     Initializes the .build_tool attribute.
@@ -258,13 +285,13 @@ class TestGypBase(TestCommon.TestCommon):
     that expect exact output from the command (make) can
     just set stdout= when they call the run_build() method.
     """
-    print "Build is not up-to-date:"
-    print self.banner('STDOUT ')
-    print self.stdout()
+    print("Build is not up-to-date:")
+    print(self.banner('STDOUT '))
+    print(self.stdout())
     stderr = self.stderr()
     if stderr:
-      print self.banner('STDERR ')
-      print stderr
+      print(self.banner('STDERR '))
+      print(stderr)
 
   def run_gyp(self, gyp_file, *args, **kw):
     """
@@ -279,7 +306,7 @@ class TestGypBase(TestCommon.TestCommon):
     # TODO:  --depth=. works around Chromium-specific tree climbing.
     depth = kw.pop('depth', '.')
     run_args = ['--depth='+depth]
-    run_args.extend(['--format='+f for f in self.formats]);
+    run_args.extend(['--format='+f for f in self.formats])
     run_args.append(gyp_file)
     if self.no_parallel:
       run_args += ['--no-parallel']
@@ -288,8 +315,9 @@ class TestGypBase(TestCommon.TestCommon):
     run_args.extend(self.extra_args)
     # Default xcode_ninja_target_pattern to ^.*$ to fix xcode-ninja tests
     xcode_ninja_target_pattern = kw.pop('xcode_ninja_target_pattern', '.*')
-    run_args.extend(
-      ['-G', 'xcode_ninja_target_pattern=%s' % xcode_ninja_target_pattern])
+    if self is TestGypXcodeNinja:
+      run_args.extend(
+        ['-G', 'xcode_ninja_target_pattern=%s' % xcode_ninja_target_pattern])
     run_args.extend(args)
     return self.run(program=self.gyp, arguments=run_args, **kw)
 
@@ -302,7 +330,7 @@ class TestGypBase(TestCommon.TestCommon):
     the tool-specific subclasses or clutter the tests themselves
     with platform-specific code.
     """
-    if kw.has_key('SYMROOT'):
+    if 'SYMROOT' in kw:
       del kw['SYMROOT']
     super(TestGypBase, self).run(*args, **kw)
 
@@ -361,6 +389,8 @@ class TestGypBase(TestCommon.TestCommon):
         name = self.lib_ + name + self._lib
       elif type == self.SHARED_LIB:
         name = self.dll_ + name + self._dll
+      elif type == self.LOADABLE_MODULE:
+        name = self.module_ + name + self._module
     return name
 
   def run_built_executable(self, name, *args, **kw):
@@ -530,7 +560,7 @@ class TestGypMake(TestGypBase):
     # Makefile.gyp_filename), so use that if there is no Makefile.
     chdir = kw.get('chdir', '')
     if not os.path.exists(os.path.join(chdir, 'Makefile')):
-      print "NO Makefile in " + os.path.join(chdir, 'Makefile')
+      print("NO Makefile in " + os.path.join(chdir, 'Makefile'))
       arguments.insert(0, '-f')
       arguments.insert(1, os.path.splitext(gyp_file)[0] + '.Makefile')
     kw['arguments'] = arguments
@@ -604,6 +634,24 @@ def ConvertToCygpath(path):
   return path
 
 
+def MakeDirs(new_dir):
+  """A wrapper around os.makedirs() that emulates "mkdir -p"."""
+  try:
+    os.makedirs(new_dir)
+  except OSError as e:
+    if e.errno != errno.EEXIST:
+      raise
+
+def GetDefaultKeychainPath():
+  """Get the keychain path, for used before updating HOME."""
+  assert sys.platform == 'darwin'
+  # Format is:
+  # $ security default-keychain
+  #     "/Some/Path/To/default.keychain"
+  path = subprocess.check_output(['security', 'default-keychain']).decode(
+      'utf-8', 'ignore').strip()
+  return path[1:-1]
+
 def FindMSBuildInstallation(msvs_version = 'auto'):
   """Returns path to MSBuild for msvs_version or latest available.
 
@@ -620,7 +668,7 @@ def FindMSBuildInstallation(msvs_version = 'auto'):
 
   msbuild_basekey = r'HKLM\SOFTWARE\Microsoft\MSBuild\ToolsVersions'
   if not registry.KeyExists(msbuild_basekey):
-    print 'Error: could not find MSBuild base registry entry'
+    print('Error: could not find MSBuild base registry entry')
     return None
 
   msbuild_version = None
@@ -629,9 +677,9 @@ def FindMSBuildInstallation(msvs_version = 'auto'):
     if registry.KeyExists(msbuild_basekey + '\\' + msbuild_test_version):
       msbuild_version = msbuild_test_version
     else:
-      print ('Warning: Environment variable GYP_MSVS_VERSION specifies "%s" '
-             'but corresponding MSBuild "%s" was not found.' %
-             (msvs_version, msbuild_version))
+      print('Warning: Environment variable GYP_MSVS_VERSION specifies "%s" '
+            'but corresponding MSBuild "%s" was not found.' %
+            (msvs_version, msbuild_version))
   if not msbuild_version:
     for msvs_version in sorted(msvs_to_msbuild, reverse=True):
       msbuild_test_version = msvs_to_msbuild[msvs_version]
@@ -639,13 +687,13 @@ def FindMSBuildInstallation(msvs_version = 'auto'):
         msbuild_version = msbuild_test_version
         break
   if not msbuild_version:
-    print 'Error: could not find MSBuild registry entry'
+    print('Error: could not find MSBuild registry entry')
     return None
 
   msbuild_path = registry.GetValue(msbuild_basekey + '\\' + msbuild_version,
                                    'MSBuildToolsPath')
   if not msbuild_path:
-    print 'Error: could not get MSBuild registry entry value'
+    print('Error: could not get MSBuild registry entry value')
     return None
 
   return os.path.join(msbuild_path, 'MSBuild.exe')
@@ -659,10 +707,16 @@ def FindVisualStudioInstallation():
   search %PATH% and %PATHEXT% for a devenv.{exe,bat,...} executable.
   Failing that, we search for likely deployment paths.
   """
+  override_build_tool = os.environ.get('GYP_BUILD_TOOL')
+  if override_build_tool:
+    return override_build_tool, True, override_build_tool
+
   possible_roots = ['%s:\\Program Files%s' % (chr(drive), suffix)
                     for drive in range(ord('C'), ord('Z') + 1)
                     for suffix in ['', ' (x86)']]
   possible_paths = {
+      '2017': r'Microsoft Visual Studio\2017',
+      '2015': r'Microsoft Visual Studio 14.0\Common7\IDE\devenv.com',
       '2013': r'Microsoft Visual Studio 12.0\Common7\IDE\devenv.com',
       '2012': r'Microsoft Visual Studio 11.0\Common7\IDE\devenv.com',
       '2010': r'Microsoft Visual Studio 10.0\Common7\IDE\devenv.com',
@@ -676,6 +730,38 @@ def FindVisualStudioInstallation():
     msvs_version = flag.split('=')[-1]
   msvs_version = os.environ.get('GYP_MSVS_VERSION', msvs_version)
 
+  if msvs_version in ['2017', 'auto']:
+    msbuild_exes = []
+    try:
+      path = possible_paths['2017']
+      for r in possible_roots:
+        build_tool = os.path.join(r, path)
+        if os.path.exists(build_tool):
+          break;
+        else:
+          build_tool = None
+      if not build_tool:
+        args1 = ['reg', 'query',
+                    'HKLM\Software\Microsoft\VisualStudio\SxS\VS7',
+                    '/v', '15.0', '/reg:32']
+        build_tool = subprocess.check_output(args1).decode(
+            'utf-8', 'ignore').strip().split(b'\r\n').pop().split(b' ').pop()
+        build_tool = build_tool.decode('utf-8')
+      if build_tool:
+        args2 = ['cmd.exe', '/d', '/c',
+                'cd', '/d', build_tool,
+                '&', 'dir', '/b', '/s', 'msbuild.exe']
+        msbuild_exes = subprocess.check_output(args2).strip().split(b'\r\n')
+        msbuild_exes = [m.decode('utf-8') for m in msbuild_exes]
+      if len(msbuild_exes):
+        msbuild_Path = os.path.join(build_tool, msbuild_exes[0])
+        if os.path.exists(msbuild_Path):
+          os.environ['GYP_MSVS_VERSION'] = '2017'
+          os.environ['GYP_BUILD_TOOL'] = msbuild_Path
+          return msbuild_Path, True, msbuild_Path
+    except Exception as e:
+      pass
+
   if msvs_version in possible_paths:
     # Check that the path to the specified GYP_MSVS_VERSION exists.
     path = possible_paths[msvs_version]
@@ -686,8 +772,8 @@ def FindVisualStudioInstallation():
         msbuild_path = FindMSBuildInstallation(msvs_version)
         return build_tool, uses_msbuild, msbuild_path
     else:
-      print ('Warning: Environment variable GYP_MSVS_VERSION specifies "%s" '
-              'but corresponding "%s" was not found.' % (msvs_version, path))
+      print('Warning: Environment variable GYP_MSVS_VERSION specifies "%s" '
+            'but corresponding "%s" was not found.' % (msvs_version, path))
   # Neither GYP_MSVS_VERSION nor the path help us out.  Iterate through
   # the choices looking for a match.
   for version in sorted(possible_paths, reverse=True):
@@ -698,7 +784,7 @@ def FindVisualStudioInstallation():
         uses_msbuild = msvs_version >= '2010'
         msbuild_path = FindMSBuildInstallation(msvs_version)
         return build_tool, uses_msbuild, msbuild_path
-  print 'Error: could not find devenv'
+  print('Error: could not find devenv')
   sys.exit(1)
 
 class TestGypOnMSToolchain(TestGypBase):
@@ -709,8 +795,16 @@ class TestGypOnMSToolchain(TestGypBase):
   @staticmethod
   def _ComputeVsvarsPath(devenv_path):
     devenv_dir = os.path.split(devenv_path)[0]
-    vsvars_path = os.path.join(devenv_path, '../../Tools/vsvars32.bat')
-    return vsvars_path
+
+    # Check for location of Community install (in VS2017, at least).
+    vcvars_path = os.path.join(devenv_path, '..', '..', '..', '..', 'VC',
+                               'Auxiliary', 'Build', 'vcvars32.bat')
+    if os.path.exists(vcvars_path):
+      return os.path.abspath(vcvars_path)
+
+    vsvars_path = os.path.join(devenv_path, '..', '..', 'Tools',
+                               'vsvars32.bat')
+    return os.path.abspath(vsvars_path)
 
   def initialize_build_tool(self):
     super(TestGypOnMSToolchain, self).initialize_build_tool()
@@ -728,7 +822,7 @@ class TestGypOnMSToolchain(TestGypBase):
     arguments = [cmd, '/c', self.vsvars_path, '&&', 'dumpbin']
     arguments.extend(dumpbin_args)
     proc = subprocess.Popen(arguments, stdout=subprocess.PIPE)
-    output = proc.communicate()[0]
+    output = proc.communicate()[0].decode('utf-8', 'ignore')
     assert not proc.returncode
     return output
 
@@ -820,26 +914,42 @@ class TestGypMSVS(TestGypOnMSToolchain):
     Runs a Visual Studio build using the configuration generated
     from the specified gyp_file.
     """
-    configuration = self.configuration_buildname()
-    if clean:
-      build = '/Clean'
-    elif rebuild:
-      build = '/Rebuild'
+    if '15.0' in self.build_tool:
+      configuration = '/p:Configuration=' + (
+        self.configuration or self.configuration_buildname())
+      build = '/t'
+      if target not in (None, self.ALL, self.DEFAULT):
+        build += ':' + target
+      if clean:
+        build += ':Clean'
+      elif rebuild:
+        build += ':Rebuild'
+      elif ':' not in build:
+        build += ':Build'
+      arguments = kw.get('arguments', [])[:]
+      arguments.extend([gyp_file.replace('.gyp', '.sln'),
+                        build, configuration])
     else:
-      build = '/Build'
-    arguments = kw.get('arguments', [])[:]
-    arguments.extend([gyp_file.replace('.gyp', '.sln'),
-                      build, configuration])
-    # Note:  the Visual Studio generator doesn't add an explicit 'all'
-    # target, so we just treat it the same as the default.
-    if target not in (None, self.ALL, self.DEFAULT):
-      arguments.extend(['/Project', target])
-    if self.configuration:
-      arguments.extend(['/ProjectConfig', self.configuration])
+      configuration = self.configuration_buildname()
+      if clean:
+        build = '/Clean'
+      elif rebuild:
+        build = '/Rebuild'
+      else:
+        build = '/Build'
+      arguments = kw.get('arguments', [])[:]
+      arguments.extend([gyp_file.replace('.gyp', '.sln'),
+                        build, configuration])
+      # Note:  the Visual Studio generator doesn't add an explicit 'all'
+      # target, so we just treat it the same as the default.
+      if target not in (None, self.ALL, self.DEFAULT):
+        arguments.extend(['/Project', target])
+      if self.configuration:
+        arguments.extend(['/ProjectConfig', self.configuration])
     kw['arguments'] = arguments
     return self.run(program=self.build_tool, **kw)
   def up_to_date(self, gyp_file, target=None, **kw):
-    """
+    r"""
     Verifies that a build of the specified Visual Studio target is up to date.
 
     Beware that VS2010 will behave strangely if you build under
@@ -1005,7 +1115,10 @@ class TestGypXcode(TestGypBase):
         if not TestCmd.is_List(expected):
           expected = expected.split('\n')
         actual = [a for a in actual
-                    if 'No recorder, buildTask: <Xcode3BuildTask:' not in a]
+                    if 'No recorder, buildTask: <Xcode3BuildTask:' not in a and
+                       'Beginning test session' not in a and
+                       'Writing diagnostic log' not in a and
+                       'Logs/Test/' not in a]
       return match(actual, expected)
     kw['match'] = match_filter_xcode
 
@@ -1143,4 +1256,4 @@ def TestGyp(*args, **kw):
   for format_class in format_class_list:
     if format == format_class.format:
       return format_class(*args, **kw)
-  raise Exception, "unknown format %r" % format
+  raise Exception("unknown format %r" % format)
