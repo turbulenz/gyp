@@ -1539,7 +1539,7 @@ def _AdjustSourcesAndConvertToFilterHierarchy(
 
     def _print_hierarchy(n, indent=0):
       def _log(msg):
-        print "%s%s" % (" " * indent, msg)
+        print("%s%s" % (" " * indent, msg))
       if isinstance(n, MSVSProject.Filter):
         _log("F: %s" % n.name)
         for _n in n.contents:
@@ -1556,7 +1556,7 @@ def _AdjustSourcesAndConvertToFilterHierarchy(
       Recursively merge any child nodes with the same name.
       """
       # def _log(msg):
-      #   print "%s%s" % (" " * indent, msg)
+      #   print("%s%s" % (" " * indent, msg))
       num_nodes = len(nodes)
       # _log("%s: %d nodes:" % (nodes, num_nodes))
 
