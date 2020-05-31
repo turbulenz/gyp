@@ -1582,7 +1582,7 @@ def _AdjustSourcesAndConvertToFilterHierarchy(
       # For all filters at this level, perform the same action on
       # their children.
 
-      for k,v in combined_nodes.iteritems():
+      for k,v in combined_nodes.items():
         v.contents =_combine_tree(v.contents, indent+1)
         new_nodes.append(v)
 
